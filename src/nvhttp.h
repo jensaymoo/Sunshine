@@ -43,7 +43,7 @@ namespace nvhttp {
   void
   start();
   bool
-  pin(std::string pin);
+  pin(std::string pin, std::string& device_id, std::string& device_cert);
   void
   erase_all_clients();
 }  // namespace nvhttp

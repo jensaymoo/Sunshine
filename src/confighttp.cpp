@@ -681,7 +681,12 @@ namespace confighttp {
       // TODO: Input Validation
       pt::read_json(ss, inputTree);
       std::string pin = inputTree.get<std::string>("pin");
-      outputTree.put("status", nvhttp::pin(pin));
+
+      std::string device_id, device_cert;
+
+      outputTree.put("status", nvhttp::pin(pin, device_id, device_cert));
+      outputTree.put("device_id", device_id); 
+      outputTree.put("device_cert", device_cert); 
     }
     catch (std::exception &e) {
       BOOST_LOG(warning) << "SavePin: "sv << e.what();

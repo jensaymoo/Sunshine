@@ -533,7 +533,7 @@ namespace nvhttp {
    * ```
    */
   bool
-  pin(std::string pin) {
+  pin(std::string pin, std::string& device_id, std::string& device_cert) {
     pt::ptree tree;
     if (map_id_sess.empty()) {
       return false;
@@ -560,6 +560,10 @@ namespace nvhttp {
     // reset async_response
     async_response = std::decay_t<decltype(async_response.left())>();
     // response to the current request
+
+    device_id = sess.client.uniqueID;
+    device_cert = sess.client.cert;
+
     return true;
   }
 
@@ -579,8 +583,10 @@ namespace nvhttp {
 
       return;
     }
+    
+    std::string device_id, device_cert;
 
-    bool pinResponse = pin(request->path_match[1]);
+    bool pinResponse = pin(request->path_match[1], device_id, device_cert);
     if (pinResponse) {
       response->write(SimpleWeb::StatusCode::success_ok);
     }
