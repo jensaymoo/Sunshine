@@ -475,6 +475,7 @@ namespace stream {
           std::string_view payload { (char *) packet->data + sizeof(type), packet->dataLength - sizeof(type) };
 
           call(type, session, payload);
+
         } break;
         case ENET_EVENT_TYPE_CONNECT:
           BOOST_LOG(info) << "CLIENT CONNECTED"sv;

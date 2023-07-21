@@ -605,6 +605,12 @@ namespace nvhttp {
       auto args = request->parse_query_string();
       auto clientID = args.find("uniqueid"s);
 
+      BOOST_LOG(info) << "------------------------------------ serverinfo: "sv << clientID->second;
+
+
+
+
+
       if (clientID != std::end(args)) {
         if (auto it = map_id_client.find(clientID->second); it != std::end(map_id_client)) {
           pair_status = 1;
@@ -999,7 +1005,7 @@ namespace nvhttp {
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) { launch(host_audio, resp, req); };
-    https_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTPS>;
+    //https_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTPS>;
     https_server.resource["^/resume$"]["GET"] = [&host_audio](auto resp, auto req) { resume(host_audio, resp, req); };
     https_server.resource["^/cancel$"]["GET"] = cancel;
 
@@ -1010,7 +1016,7 @@ namespace nvhttp {
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
     http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
     http_server.resource["^/pair$"]["GET"] = [&add_cert](auto resp, auto req) { pair<SimpleWeb::HTTP>(add_cert, resp, req); };
-    http_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTP>;
+    //http_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTP>;
 
     http_server.config.reuse_address = true;
     http_server.config.address = "0.0.0.0"s;
