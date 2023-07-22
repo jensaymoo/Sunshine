@@ -119,6 +119,7 @@ endif()
 
 add_subdirectory(third-party/moonlight-common-c/enet)
 add_subdirectory(third-party/Simple-Web-Server)
+add_subdirectory(third-party/restclient-cpp)
 
 set(UPNPC_BUILD_SHARED OFF CACHE BOOL "no shared libraries")
 set(UPNPC_BUILD_TESTS OFF CACHE BOOL "Don't build tests for miniupnpc")
@@ -495,6 +496,9 @@ set(SUNSHINE_TARGET_FILES
         third-party/moonlight-common-c/src/Rtsp.h
         third-party/moonlight-common-c/src/RtspParser.c
         third-party/moonlight-common-c/src/Video.h
+      	third-party/restclient-cpp/include/restclient-cpp/connection.h
+	    third-party/restclient-cpp/include/restclient-cpp/helpers.h
+	    third-party/restclient-cpp/include/restclient-cpp/restclient.h
         third-party/tray/tray.h
         src/upnp.cpp
         src/upnp.h
@@ -591,6 +595,7 @@ include_directories(
         SYSTEM
         ${CMAKE_CURRENT_SOURCE_DIR}/third-party
         ${CMAKE_CURRENT_SOURCE_DIR}/third-party/moonlight-common-c/enet/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/third-party/restclient-cpp/include/restclient-cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/third-party/nanors
         ${CMAKE_CURRENT_SOURCE_DIR}/third-party/nanors/deps/obl
         ${FFMPEG_INCLUDE_DIRS}
@@ -622,8 +627,11 @@ else()
 endif()
 list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_ASSETS_DIR="${SUNSHINE_ASSETS_DIR_DEF}")
 
+
+
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         libminiupnpc-static
+        restclient-cpp
         ${CMAKE_THREAD_LIBS_INIT}
         enet
         opus
