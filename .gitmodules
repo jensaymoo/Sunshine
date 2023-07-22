@@ -50,3 +50,7 @@
 	path = third-party/tray
 	url = https://github.com/dmikushin/tray
 	branch = master
+[submodule "third-party/restclient-cpp"]
+	path = third-party/restclient-cpp
+	url = https://github.com/mrtazz/restclient-cpp
+	branch = master
