@@ -62,7 +62,7 @@ namespace uuid_util {
 
       std::copy(std::begin(last_slice), std::end(last_slice), std::back_inserter(result));
 
-      return result;
+      return boost::algorithm::to_lower_copy(result);
     }
 
     constexpr bool
