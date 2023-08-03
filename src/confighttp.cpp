@@ -15,12 +15,12 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/xml_parser.hpp>
-
 #include <boost/algorithm/string.hpp>
-
 #include <boost/asio/ssl/context.hpp>
-
 #include <boost/filesystem.hpp>
+
+#include <connection.h>
+#include <restclient.h>
 
 #include <Simple-Web-Server/crypto.hpp>
 #include <Simple-Web-Server/server_https.hpp>
@@ -549,10 +549,19 @@ namespace confighttp {
     outputTree.put("platform", SUNSHINE_PLATFORM);
     outputTree.put("version", PROJECT_VER);
 
-    auto vars = config::parse_config(read_file(config::sunshine.config_file.c_str()));
+    RestClient::Connection *connection = new RestClient::Connection(config::sunshine.rest_server);
+    connection->SetUserAgent("sunshine/" + std::string(nvhttp::VERSION));
+    connection->AppendHeader("Instance", http::sunshine_instance_id);
 
-    for (auto &[name, value] : vars) {
-      outputTree.put(std::move(name), std::move(value));
+    RestClient::Response config_response = connection->get("api/config");
+
+    if (config_response.code == 200) {
+      // Read config data from rest server
+      auto vars = config::parse_config(config_response.body);
+
+      for (auto &[name, value] : vars) {
+        outputTree.put(std::move(name), std::move(value));
+      }
     }
   }
 
@@ -685,13 +694,12 @@ namespace confighttp {
 
       std::string output_sunshine_id;
 
-      auto pin_check =  nvhttp::pin(user_id, pin, output_sunshine_id);
+      auto pin_check = nvhttp::pin(user_id, pin, output_sunshine_id);
 
       outputTree.put("status", pin_check);
 
-      if(pin_check)
-        outputTree.put("sunshine_id", output_sunshine_id); 
-
+      if (pin_check)
+        outputTree.put("sunshine_id", output_sunshine_id);
     }
     catch (std::exception &e) {
       BOOST_LOG(warning) << "SavePin: "sv << e.what();
