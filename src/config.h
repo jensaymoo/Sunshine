@@ -141,6 +141,7 @@ namespace config {
     std::string username;
     std::string password;
     std::string salt;
+    std::string rest_server;
 
     std::string config_file;
 
@@ -166,5 +167,5 @@ namespace config {
   int
   parse(int argc, char *argv[]);
   std::unordered_map<std::string, std::string>
-  parse_config(const std::string_view &file_content);
+  parse_config(const std::string &json_config_data);
 }  // namespace config

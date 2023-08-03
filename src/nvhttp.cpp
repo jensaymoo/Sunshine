@@ -12,11 +12,23 @@
 // lib includes
 #include <Simple-Web-Server/server_http.hpp>
 #include <Simple-Web-Server/server_https.hpp>
+#include <Simple-Web-Server/crypto.hpp>
+
 #include <boost/asio/ssl/context.hpp>
 #include <boost/asio/ssl/context_base.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/xml_parser.hpp>
+#include <boost/iostreams/device/array.hpp>
+#include <boost/iostreams/stream.hpp>
+
+#include <cstdint>
+#include <cctype>
+#include <iostream>
+
+#include <restclient.h>
+#include <connection.h>
+
 
 // local includes
 #include "config.h"
@@ -37,6 +49,7 @@ namespace nvhttp {
 
   namespace fs = std::filesystem;
   namespace pt = boost::property_tree;
+  namespace io = boost::iostreams;
 
   class SunshineHttpsServer: public SimpleWeb::Server<SimpleWeb::HTTPS> {
   public:
@@ -111,18 +124,20 @@ namespace nvhttp {
   } conf_intern;
 
   struct client_t {
-    std::string uniqueID;
+    std::string device_id;
     std::vector<std::string> certs;
   };
 
   struct pair_session_t {
     struct {
-      std::string uniqueID;
+      std::string user_id;
+      std::string device_id;
       std::string cert;
     } client;
 
     std::unique_ptr<crypto::aes_t> cipher_key;
     std::vector<uint8_t> clienthash;
+
 
     std::string serversecret;
     std::string serverchallenge;
@@ -136,7 +151,7 @@ namespace nvhttp {
     } async_insert_pin;
   };
 
-  // uniqueID, session
+  // device_id, session
   std::unordered_map<std::string, pair_session_t> map_id_sess;
   std::unordered_map<std::string, client_t> map_id_client;
 
@@ -176,12 +191,12 @@ namespace nvhttp {
 
     root.erase("root"s);
 
-    root.put("root.uniqueid", http::unique_id);
+    root.put("root.uniqueid", http::service_id);
     auto &nodes = root.add_child("root.devices", pt::ptree {});
     for (auto &[_, client] : map_id_client) {
       pt::ptree node;
 
-      node.put("uniqueid"s, client.uniqueID);
+      node.put("uniqueid"s, client.device_id);
 
       pt::ptree cert_nodes;
       for (auto &cert : client.certs) {
@@ -204,55 +219,115 @@ namespace nvhttp {
   }
 
   void
-  load_state() {
-    if (!fs::exists(config::nvhttp.file_state)) {
-      BOOST_LOG(info) << "File "sv << config::nvhttp.file_state << " doesn't exist"sv;
-      http::unique_id = uuid_util::uuid_t::generate().string();
-      return;
-    }
+  load_devices() {
+    RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+    connection->SetUserAgent("sunshine/" + std::string(VERSION));
+    connection->AppendHeader("Instance", http::sunshine_instance_id);
+    connection->AppendHeader("Service", http::service_id);
 
-    pt::ptree root;
-    try {
-      pt::read_json(config::nvhttp.file_state, root);
-    }
-    catch (std::exception &e) {
-      BOOST_LOG(error) << "Couldn't read "sv << config::nvhttp.file_state << ": "sv << e.what();
+    RestClient::Response response = connection->get("api/devices");
 
-      return;
-    }
+    if (response.code == 200) {
+      pt::ptree json_response;
+      io::array_source as(&response.body[0], response.body.size());
+      io::stream<io::array_source> is(as);
 
-    auto unique_id_p = root.get_optional<std::string>("root.uniqueid");
-    if (!unique_id_p) {
-      // This file doesn't contain moonlight credentials
-      http::unique_id = uuid_util::uuid_t::generate().string();
-      return;
-    }
-    http::unique_id = std::move(*unique_id_p);
+      pt::read_json(is, json_response);
 
-    auto device_nodes = root.get_child("root.devices");
+      auto user_nodes = json_response.get_child("users");
+      for (auto &[_, user_node] : user_nodes) {
+        auto device_nodes = user_node.get_child("devices");
 
-    for (auto &[_, device_node] : device_nodes) {
-      auto uniqID = device_node.get<std::string>("uniqueid");
-      auto &client = map_id_client.emplace(uniqID, client_t {}).first->second;
+        for (auto &[_, device_node] : device_nodes) {
+          auto device_id = device_node.get<std::string>("device_id");
+          auto &client = map_id_client.emplace(device_id, client_t {}).first->second;
 
-      client.uniqueID = uniqID;
+          client.device_id = device_id;
 
-      for (auto &[_, el] : device_node.get_child("certs")) {
-        client.certs.emplace_back(el.get_value<std::string>());
+          for (auto &[_, el] : device_node.get_child("certs")) {
+            auto cert_id = el.get<std::string>("cert_id");
+            auto decoded_cert = SimpleWeb::Crypto::Base64::decode(el.get<std::string>("cert"));
+
+            client.certs.emplace_back(decoded_cert);
+
+            BOOST_LOG(info) << "Device cert "sv << cert_id << " to device "sv << device_id << ", loaded from "sv << config::sunshine.rest_server;
+          }
+        }
       }
+    }
+    else {
+      BOOST_LOG(warning) << "Couldn't load devices and certs data from "sv << config::sunshine.rest_server << ", server returned code: "sv << response.code;
     }
   }
 
   void
-  update_id_client(const std::string &uniqueID, std::string &&cert, op_e op) {
+  update_client_device(const std::string &user_id, const std::string &device_id, std::string &&cert, op_e op) {
     switch (op) {
       case op_e::ADD: {
-        auto &client = map_id_client[uniqueID];
+        auto &client = map_id_client[device_id];
         client.certs.emplace_back(std::move(cert));
-        client.uniqueID = uniqueID;
+        client.device_id = device_id; 
+        
+        pt::ptree cert;
+        auto cert_id = uuid_util::uuid_t::generate().string();
+        cert.put("cert_id"s, cert_id);
+        cert.put("cert"s, SimpleWeb::Crypto::Base64::encode(client.certs.back()));
+
+        pt::ptree cert_nodes;
+        cert_nodes.push_back(std::make_pair(""s, cert));
+
+        pt::ptree device;
+        device.put("device_id"s, device_id);
+        device.add_child("certs"s, cert_nodes);
+
+        pt::ptree device_nodes;
+        device_nodes.push_back(std::make_pair(""s, device));
+
+        pt::ptree user;
+        user.put("user_id"s, user_id);
+        user.add_child("devices"s, device_nodes);
+
+        pt::ptree user_nodes;
+        user_nodes.push_back(std::make_pair(""s, user));;
+
+        pt::ptree root;
+        root.add_child("users"s, user_nodes);
+
+        std::stringstream ss;
+        pt::write_json(ss, root);
+
+        RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+        connection->SetUserAgent("sunshine/" + std::string(VERSION));
+        connection->AppendHeader("Instance", http::sunshine_instance_id);
+        connection->AppendHeader("Service", http::service_id);
+        connection->AppendHeader("Content-Type", "application/json");
+
+        RestClient::Response response = connection->post("api/devices", ss.str());
+
+        if (response.code == 200)
+          BOOST_LOG(info) << "Updated certificate "sv << device_id << ", device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server;
+        else {
+          BOOST_LOG(warning) << "Certificate "sv << cert_id << ", device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server << " not updated, server returned code: "sv << response.code;
+          map_id_client.erase(device_id);
+        }
+
       } break;
       case op_e::REMOVE:
-        map_id_client.erase(uniqueID);
+        RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+        connection->SetUserAgent("sunshine/" + std::string(VERSION));
+        connection->AppendHeader("Instance", http::sunshine_instance_id);
+        connection->AppendHeader("Service", http::service_id);
+
+        RestClient::Response response = connection->del("api/devices/" + device_id);
+
+        if (response.code == 200) {
+          BOOST_LOG(info) << "Removed device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server;
+          map_id_client.erase(device_id);
+        }
+        else {
+          BOOST_LOG(warning) << "Device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server << " not removed, server returned code: "sv << response.code;
+        }
+        //map_id_client.erase(device_id);
         break;
     }
 
@@ -381,13 +456,13 @@ namespace nvhttp {
       tree.put("root.paired", 1);
       add_cert->raise(crypto::x509(client.cert));
 
-      auto it = map_id_sess.find(client.uniqueID);
-
-      update_id_client(client.uniqueID, std::move(client.cert), op_e::ADD);
+      auto it = map_id_sess.find(client.device_id);
+      
+      update_client_device(client.user_id, client.device_id, std::move(client.cert), op_e::ADD);
       map_id_sess.erase(it);
     }
     else {
-      map_id_sess.erase(client.uniqueID);
+      map_id_sess.erase(client.device_id);
       tree.put("root.paired", 0);
     }
 
@@ -479,28 +554,28 @@ namespace nvhttp {
       if (it->second == "getservercert"sv) {
         pair_session_t sess;
 
-        sess.client.uniqueID = std::move(uniqID);
+        sess.client.device_id = std::move(uniqID);
         sess.client.cert = util::from_hex_vec(get_arg(args, "clientcert"), true);
 
         BOOST_LOG(debug) << sess.client.cert;
-        auto ptr = map_id_sess.emplace(sess.client.uniqueID, std::move(sess)).first;
+        auto ptr = map_id_sess.emplace(sess.client.device_id, std::move(sess)).first;
 
         ptr->second.async_insert_pin.salt = std::move(get_arg(args, "salt"));
 
-        if (config::sunshine.flags[config::flag::PIN_STDIN]) {
-          std::string pin;
+        // if (config::sunshine.flags[config::flag::PIN_STDIN]) {
+        //   std::string pin;
 
-          std::cout << "Please insert pin: "sv;
-          std::getline(std::cin, pin);
+        //   std::cout << "Please insert pin: "sv;
+        //   std::getline(std::cin, pin);
 
-          getservercert(ptr->second, tree, pin);
-        }
-        else {
+        //   getservercert(ptr->second, tree, pin);
+        // }
+        // else {
           ptr->second.async_insert_pin.response = std::move(response);
 
           fg.disable();
-          return;
-        }
+        //   return;
+        // }
       }
       else if (it->second == "pairchallenge"sv) {
         tree.put("root.paired", 1);
@@ -533,13 +608,15 @@ namespace nvhttp {
    * ```
    */
   bool
-  pin(std::string pin, std::string& device_id, std::string& device_cert) {
+  pin(std::string user_id, std::string pin, std::string& instance_id) {
     pt::ptree tree;
     if (map_id_sess.empty()) {
       return false;
     }
 
     auto &sess = std::begin(map_id_sess)->second;
+    sess.client.user_id = user_id;
+
     getservercert(sess, tree, pin);
 
     // response to the request for pin
@@ -559,10 +636,7 @@ namespace nvhttp {
 
     // reset async_response
     async_response = std::decay_t<decltype(async_response.left())>();
-    // response to the current request
-
-    device_id = sess.client.uniqueID;
-    device_cert = sess.client.cert;
+    instance_id = http::sunshine_instance_id;
 
     return true;
   }
@@ -584,9 +658,9 @@ namespace nvhttp {
       return;
     }
     
-    std::string device_id, device_cert;
+    std::string instance_id;
 
-    bool pinResponse = pin(request->path_match[1], device_id, device_cert);
+    bool pinResponse = pin(request->path_match[1], instance_id);
     if (pinResponse) {
       response->write(SimpleWeb::StatusCode::success_ok);
     }
@@ -605,12 +679,6 @@ namespace nvhttp {
       auto args = request->parse_query_string();
       auto clientID = args.find("uniqueid"s);
 
-      BOOST_LOG(info) << "------------------------------------ serverinfo: "sv << clientID->second;
-
-
-
-
-
       if (clientID != std::end(args)) {
         if (auto it = map_id_client.find(clientID->second); it != std::end(map_id_client)) {
           pair_status = 1;
@@ -627,7 +695,8 @@ namespace nvhttp {
 
     tree.put("root.appversion", VERSION);
     tree.put("root.GfeVersion", GFE_VERSION);
-    tree.put("root.uniqueid", http::unique_id);
+    tree.put("root.uniqueid", http::service_id);
+    tree.put("root.instance_id", http::sunshine_instance_id);
     tree.put("root.HttpsPort", map_port(PORT_HTTPS));
     tree.put("root.ExternalPort", map_port(PORT_HTTP));
     tree.put("root.mac", platf::get_mac_address(local_endpoint.address().to_string()));
@@ -714,6 +783,11 @@ namespace nvhttp {
   launch(bool &host_audio, resp_https_t response, req_https_t request) {
     print_req<SimpleWeb::HTTPS>(request);
 
+    auto args = request->parse_query_string();
+    auto clientID = args.find("uniqueid"s);
+
+    BOOST_LOG(info) << "Launch session for "sv << clientID->second;
+
     pt::ptree tree;
     auto g = util::fail_guard([&]() {
       std::ostringstream data;
@@ -731,7 +805,6 @@ namespace nvhttp {
       return;
     }
 
-    auto args = request->parse_query_string();
     if (
       args.find("rikey"s) == std::end(args) ||
       args.find("rikeyid"s) == std::end(args) ||
@@ -922,7 +995,7 @@ namespace nvhttp {
     bool clean_slate = config::sunshine.flags[config::flag::FRESH_STATE];
 
     if (!clean_slate) {
-      load_state();
+      load_devices();
     }
 
     conf_intern.pkey = read_file(config::nvhttp.pkey.c_str());
@@ -1005,7 +1078,7 @@ namespace nvhttp {
     https_server.resource["^/applist$"]["GET"] = applist;
     https_server.resource["^/appasset$"]["GET"] = appasset;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) { launch(host_audio, resp, req); };
-    //https_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTPS>;
+    // https_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTPS>;
     https_server.resource["^/resume$"]["GET"] = [&host_audio](auto resp, auto req) { resume(host_audio, resp, req); };
     https_server.resource["^/cancel$"]["GET"] = cancel;
 
@@ -1016,7 +1089,7 @@ namespace nvhttp {
     http_server.default_resource["GET"] = not_found<SimpleWeb::HTTP>;
     http_server.resource["^/serverinfo$"]["GET"] = serverinfo<SimpleWeb::HTTP>;
     http_server.resource["^/pair$"]["GET"] = [&add_cert](auto resp, auto req) { pair<SimpleWeb::HTTP>(add_cert, resp, req); };
-    //http_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTP>;
+    // http_server.resource["^/pin/([0-9]+)$"]["GET"] = pin<SimpleWeb::HTTP>;
 
     http_server.config.reuse_address = true;
     http_server.config.address = "0.0.0.0"s;

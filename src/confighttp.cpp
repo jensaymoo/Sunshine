@@ -680,13 +680,18 @@ namespace confighttp {
     try {
       // TODO: Input Validation
       pt::read_json(ss, inputTree);
+      std::string user_id = inputTree.get<std::string>("user_id");
       std::string pin = inputTree.get<std::string>("pin");
 
-      std::string device_id, device_cert;
+      std::string output_sunshine_id;
 
-      outputTree.put("status", nvhttp::pin(pin, device_id, device_cert));
-      outputTree.put("device_id", device_id); 
-      outputTree.put("device_cert", device_cert); 
+      auto pin_check =  nvhttp::pin(user_id, pin, output_sunshine_id);
+
+      outputTree.put("status", pin_check);
+
+      if(pin_check)
+        outputTree.put("sunshine_id", output_sunshine_id); 
+
     }
     catch (std::exception &e) {
       BOOST_LOG(warning) << "SavePin: "sv << e.what();

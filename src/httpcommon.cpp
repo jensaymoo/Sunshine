@@ -16,9 +16,13 @@
 
 #include <Simple-Web-Server/server_http.hpp>
 #include <Simple-Web-Server/server_https.hpp>
+#include <Simple-Web-Server/crypto.hpp>
 #include <boost/asio/ssl/context_base.hpp>
+#include <boost/iostreams/stream.hpp>
 #include <curl/curl.h>
 
+#include <restclient.h>
+#include <connection.h>
 #include "config.h"
 #include "crypto.h"
 #include "httpcommon.h"
@@ -34,13 +38,15 @@ namespace http {
   using namespace std::literals;
   namespace fs = std::filesystem;
   namespace pt = boost::property_tree;
-
+  namespace io = boost::iostreams;
   int
   reload_user_creds(const std::string &file);
   bool
   user_creds_exist(const std::string &file);
 
-  std::string unique_id;
+  std::string service_id;
+  std::string sunshine_instance_id;
+
   net::net_e origin_pin_allowed;
   net::net_e origin_web_ui_allowed;
 
@@ -50,18 +56,12 @@ namespace http {
     origin_pin_allowed = net::from_enum_string(config::nvhttp.origin_pin_allowed);
     origin_web_ui_allowed = net::from_enum_string(config::nvhttp.origin_web_ui_allowed);
 
-    if (clean_slate) {
-      unique_id = uuid_util::uuid_t::generate().string();
-      auto dir = std::filesystem::temp_directory_path() / "Sunshine"sv;
-      config::nvhttp.cert = (dir / ("cert-"s + unique_id)).string();
-      config::nvhttp.pkey = (dir / ("pkey-"s + unique_id)).string();
+    sunshine_instance_id = uuid_util::uuid_t::generate().string();
+
+    if (create_creds(config::nvhttp.pkey, config::nvhttp.cert)) {
+      return -1;
     }
 
-    if (!fs::exists(config::nvhttp.pkey) || !fs::exists(config::nvhttp.cert)) {
-      if (create_creds(config::nvhttp.pkey, config::nvhttp.cert)) {
-        return -1;
-      }
-    }
     if (user_creds_exist(config::sunshine.credentials_file)) {
       if (reload_user_creds(config::sunshine.credentials_file)) return -1;
     }
@@ -142,8 +142,6 @@ namespace http {
     fs::path pkey_path = pkey;
     fs::path cert_path = cert;
 
-    auto creds = crypto::gen_creds("Sunshine Gamestream Host"sv, 2048);
-
     auto pkey_dir = pkey_path;
     auto cert_dir = cert_path;
     pkey_dir.remove_filename();
@@ -162,13 +160,34 @@ namespace http {
       return -1;
     }
 
-    if (write_file(pkey.c_str(), creds.pkey)) {
-      BOOST_LOG(error) << "Couldn't open ["sv << config::nvhttp.pkey << ']';
-      return -1;
-    }
+    RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+    connection->SetUserAgent("sunshine/" + std::string(nvhttp::VERSION));
+    connection->AppendHeader("Instance", http::sunshine_instance_id);
 
-    if (write_file(cert.c_str(), creds.x509)) {
-      BOOST_LOG(error) << "Couldn't open ["sv << config::nvhttp.cert << ']';
+    // get cakey and cakey from rest server
+    RestClient::Response response = connection->get("api/config/creds");
+
+    if (response.code == 200) {
+      pt::ptree root;
+      io::array_source as(&response.body[0], response.body.size());
+      io::stream<io::array_source> is(as);
+
+      pt::read_json(is, root);
+
+      auto decoded_cacert = SimpleWeb::Crypto::Base64::decode(root.get<std::string>("cacert"));
+      if (write_file(cert.c_str(), decoded_cacert)) {
+        BOOST_LOG(error) << "Couldn't open ["sv << config::nvhttp.cert << ']';
+        return -1;
+      }
+
+      auto decoded_cakey = SimpleWeb::Crypto::Base64::decode(root.get<std::string>("cakey"));
+      if (write_file(pkey.c_str(), decoded_cakey)) {
+        BOOST_LOG(error) << "Couldn't open ["sv << config::nvhttp.pkey << ']';
+        return -1;
+      }
+    }
+    else {
+      BOOST_LOG(error) << "Couldn't read CAkey from "sv << config::sunshine.rest_server << ", server returned code: "sv << response.code;
       return -1;
     }
 

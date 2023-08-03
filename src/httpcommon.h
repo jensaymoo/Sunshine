@@ -29,7 +29,9 @@ namespace http {
   std::string
   url_get_host(const std::string &url);
 
-  extern std::string unique_id;
+  extern std::string service_id;
+  extern std::string sunshine_instance_id;
+
   extern net::net_e origin_pin_allowed;
   extern net::net_e origin_web_ui_allowed;
 

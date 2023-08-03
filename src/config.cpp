@@ -9,14 +9,20 @@
 #include <iostream>
 #include <unordered_map>
 
+#include <restclient.h>
+#include <connection.h>
 #include <boost/asio.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
+#include <boost/iostreams/device/array.hpp>
+#include <boost/iostreams/stream.hpp>
 
 #include "config.h"
 #include "main.h"
 #include "utility.h"
+#include "nvhttp.h"
+#include "httpcommon.h"
 
 #include "platform/common.h"
 
@@ -25,6 +31,8 @@
 #endif
 
 namespace fs = std::filesystem;
+namespace pt = boost::property_tree;
+namespace io = boost::iostreams;
 using namespace std::literals;
 
 #define CA_DIR "credentials"
@@ -451,6 +459,7 @@ namespace config {
     {},  // Username
     {},  // Password
     {},  // Password Salt
+    "http://localhost:8080/", // rest server
     platf::appdata().string() + "/sunshine.conf",  // config file
     {},  // cmd args
     47989,
@@ -544,28 +553,51 @@ namespace config {
   }
 
   std::unordered_map<std::string, std::string>
-  parse_config(const std::string_view &file_content) {
+  parse_config(const std::string &json_config_data) {
     std::unordered_map<std::string, std::string> vars;
 
-    auto pos = std::begin(file_content);
-    auto end = std::end(file_content);
+    // RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+    // connection->SetUserAgent("sunshine/" + std::string(nvhttp::VERSION));
+    // connection->AppendHeader("Instance", http::sunshine_instance_id);
 
-    while (pos < end) {
-      // auto newline = std::find_if(pos, end, [](auto ch) { return ch == '\n' || ch == '\r'; });
-      TUPLE_2D(endl, var, parse_option(pos, end));
+    // RestClient::Response response = connection->get("api/config");
 
-      pos = endl;
-      if (pos != end) {
-        pos += (*pos == '\r') ? 2 : 1;
+
+    // if (response.code == 200) {
+      pt::ptree json_config;
+      io::array_source as(&json_config_data[0], json_config_data.size());
+      io::stream<io::array_source> is(as);
+
+      pt::read_json(is, json_config);
+      auto config_nodes = json_config.get_child("");
+
+      for (auto &[param_name, param_data] : config_nodes) {
+        if(param_data.empty()) {
+          vars.emplace(param_name.data(),param_data.data());
+
+        } else {
+          auto data_nodes = param_data.get_child("");
+
+          std::vector<std::string> vec;
+          for (auto &[_, data_nodes] : data_nodes) 
+            vec.push_back(data_nodes.data());
+          
+
+          std::ostringstream oss;
+
+          if (!vec.empty())
+          {
+            std::copy(vec.begin(), vec.end()-1,
+            std::ostream_iterator<std::string>(oss, ","));
+
+            oss << vec.back();
+          }
+
+          vars.emplace(param_name.data(), oss.str());
+        }   
       }
 
-      if (!var) {
-        continue;
-      }
-
-      vars.emplace(std::move(*var));
-    }
-
+    // }
     return vars;
   }
 
@@ -842,6 +874,7 @@ namespace config {
     std::vector<std::string> list;
     list_string_f(vars, name, list);
 
+    input.clear();
     for (auto &el : list) {
       std::string_view val = el;
 
@@ -1170,23 +1203,28 @@ namespace config {
         boost::filesystem::create_directories(platf::appdata().string());
       }
 
-      // Create empty config file if it does not exist
-      if (!fs::exists(sunshine.config_file)) {
-        std::ofstream { sunshine.config_file };
+      RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+      connection->SetUserAgent("sunshine/" + std::string(nvhttp::VERSION));
+      connection->AppendHeader("Instance", http::sunshine_instance_id);
+
+      RestClient::Response response = connection->get("api/config");
+
+      if (response.code == 200) {
+        // Read config data from rest server
+        auto vars = parse_config(response.body);
+
+        for (auto &[name, value] : cmd_vars) {
+          vars.insert_or_assign(std::move(name), std::move(value));
+        }
+
+        // Apply the config. Note: This will try to create any paths
+        // referenced in the config, so we may receive exceptions if
+        // the path is incorrect or inaccessible.
+        apply_config(std::move(vars));
+        config_loaded = true;
       }
-
-      // Read config file
-      auto vars = parse_config(read_file(sunshine.config_file.c_str()));
-
-      for (auto &[name, value] : cmd_vars) {
-        vars.insert_or_assign(std::move(name), std::move(value));
-      }
-
-      // Apply the config. Note: This will try to create any paths
-      // referenced in the config, so we may receive exceptions if
-      // the path is incorrect or inaccessible.
-      apply_config(std::move(vars));
-      config_loaded = true;
+      else
+        BOOST_LOG(fatal) << "Couldn't load config data from "sv << config::sunshine.rest_server << ", server returned code: "sv << response.code;
     }
     catch (const std::filesystem::filesystem_error &err) {
       BOOST_LOG(fatal) << "Failed to apply config: "sv << err.what();
