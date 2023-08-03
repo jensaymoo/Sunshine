@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.18)
 # `CMAKE_CUDA_ARCHITECTURES` requires 3.18
 
+set(BUILD_SHARED_LIBS OFF)
 # todo - set version to 0.0.0 once confident in automated versioning
 project(Sunshine VERSION 0.20.0
         DESCRIPTION "Sunshine is a self-hosted game stream host for Moonlight."
