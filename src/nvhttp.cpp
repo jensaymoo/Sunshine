@@ -327,7 +327,6 @@ namespace nvhttp {
         else {
           BOOST_LOG(warning) << "Device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server << " not removed, server returned code: "sv << response.code;
         }
-        //map_id_client.erase(device_id);
         break;
     }
 
