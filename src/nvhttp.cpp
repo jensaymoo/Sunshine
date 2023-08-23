@@ -224,6 +224,7 @@ namespace nvhttp {
     connection->SetUserAgent("sunshine/" + std::string(VERSION));
     connection->AppendHeader("Instance", http::sunshine_instance_id);
     connection->AppendHeader("Service", http::service_id);
+    connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
 
     RestClient::Response response = connection->get("api/devices");
 
@@ -301,6 +302,7 @@ namespace nvhttp {
         connection->AppendHeader("Instance", http::sunshine_instance_id);
         connection->AppendHeader("Service", http::service_id);
         connection->AppendHeader("Content-Type", "application/json");
+        connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
 
         RestClient::Response response = connection->post("api/devices", ss.str());
 
@@ -317,7 +319,8 @@ namespace nvhttp {
         connection->SetUserAgent("sunshine/" + std::string(VERSION));
         connection->AppendHeader("Instance", http::sunshine_instance_id);
         connection->AppendHeader("Service", http::service_id);
-
+        connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
+        
         RestClient::Response response = connection->del("api/devices/" + device_id);
 
         if (response.code == 200) {

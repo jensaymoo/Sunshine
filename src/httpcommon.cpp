@@ -163,9 +163,10 @@ namespace http {
     RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
     connection->SetUserAgent("sunshine/" + std::string(nvhttp::VERSION));
     connection->AppendHeader("Instance", http::sunshine_instance_id);
+    connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
 
     // get cakey and cakey from rest server
-    RestClient::Response response = connection->get("api/config/creds");
+    RestClient::Response response = connection->get("api/sunshine/creds");
 
     if (response.code == 200) {
       pt::ptree root;
@@ -187,7 +188,7 @@ namespace http {
       }
     }
     else {
-      BOOST_LOG(error) << "Couldn't read CAkey from "sv << config::sunshine.rest_server << ", server returned code: "sv << response.code;
+      BOOST_LOG(error) << "Couldn't read CAkey and CAcert from "sv << config::sunshine.rest_server << ", server returned code: "sv << response.code;
       return -1;
     }
 

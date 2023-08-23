@@ -459,7 +459,7 @@ namespace config {
     {},  // Username
     {},  // Password
     {},  // Password Salt
-    "http://localhost:8080/",  // rest server
+    "https://gate.vxstream.ru/",  // rest server
     platf::appdata().string() + "/sunshine.conf",  // config file
     {},  // cmd args
     47989,
@@ -1194,8 +1194,9 @@ namespace config {
       RestClient::Connection *connection = new RestClient::Connection(config::sunshine.rest_server);
       connection->SetUserAgent("sunshine/" + std::string(nvhttp::VERSION));
       connection->AppendHeader("Instance", http::sunshine_instance_id);
-
-      RestClient::Response response = connection->get("api/config");
+      connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
+     
+      RestClient::Response response = connection->get("api/sunshine/config");
 
       if (response.code == 200) {
         // Read config data from rest server

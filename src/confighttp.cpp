@@ -552,8 +552,9 @@ namespace confighttp {
     RestClient::Connection *connection = new RestClient::Connection(config::sunshine.rest_server);
     connection->SetUserAgent("sunshine/" + std::string(nvhttp::VERSION));
     connection->AppendHeader("Instance", http::sunshine_instance_id);
-
-    RestClient::Response config_response = connection->get("api/config");
+    connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
+    
+    RestClient::Response config_response = connection->get("api/sunshine/config");
 
     if (config_response.code == 200) {
       // Read config data from rest server
