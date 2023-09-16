@@ -247,10 +247,10 @@ namespace nvhttp {
           auto cert_id = el.get<std::string>("cert_id");
           auto decoded_cert = SimpleWeb::Crypto::Base64::decode(el.get<std::string>("cert"));
 
-          client.certs.emplace_back(decoded_cert);
-
-          BOOST_LOG(info) << "Device cert "sv << cert_id << " to device "sv << device_id << ", loaded from "sv << config::sunshine.rest_server;
+          client.certs.emplace_back(decoded_cert);          
         }
+
+        BOOST_LOG(info) << "Certs data for device "sv << device_id << ", loaded from "sv << config::sunshine.rest_server;
       }
     }
     else {
