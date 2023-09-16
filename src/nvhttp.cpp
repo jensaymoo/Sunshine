@@ -224,7 +224,7 @@ namespace nvhttp {
     connection->SetUserAgent("sunshine/" + std::string(VERSION));
     connection->AppendHeader("Instance", http::sunshine_instance_id);
     connection->AppendHeader("Service", http::service_id);
-    connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
+    connection->SetCAInfoFilePath(platf::appdata().string() + "/cacert.crt");
 
     RestClient::Response response = connection->get("api/devices");
 
@@ -235,24 +235,21 @@ namespace nvhttp {
 
       pt::read_json(is, json_response);
 
-      auto user_nodes = json_response.get_child("users");
-      for (auto &[_, user_node] : user_nodes) {
-        auto device_nodes = user_node.get_child("devices");
+      auto device_nodes = json_response;
 
-        for (auto &[_, device_node] : device_nodes) {
-          auto device_id = device_node.get<std::string>("device_id");
-          auto &client = map_id_client.emplace(device_id, client_t {}).first->second;
+      for (auto &[_, device_node] : device_nodes) {
+        auto device_id = device_node.get<std::string>("device_id");
+        auto &client = map_id_client.emplace(device_id, client_t {}).first->second;
 
-          client.device_id = device_id;
+        client.device_id = device_id;
 
-          for (auto &[_, el] : device_node.get_child("certs")) {
-            auto cert_id = el.get<std::string>("cert_id");
-            auto decoded_cert = SimpleWeb::Crypto::Base64::decode(el.get<std::string>("cert"));
+        for (auto &[_, el] : device_node.get_child("certs")) {
+          auto cert_id = el.get<std::string>("cert_id");
+          auto decoded_cert = SimpleWeb::Crypto::Base64::decode(el.get<std::string>("cert"));
 
-            client.certs.emplace_back(decoded_cert);
+          client.certs.emplace_back(decoded_cert);
 
-            BOOST_LOG(info) << "Device cert "sv << cert_id << " to device "sv << device_id << ", loaded from "sv << config::sunshine.rest_server;
-          }
+          BOOST_LOG(info) << "Device cert "sv << cert_id << " to device "sv << device_id << ", loaded from "sv << config::sunshine.rest_server;
         }
       }
     }
@@ -265,72 +262,86 @@ namespace nvhttp {
   update_client_device(const std::string &user_id, const std::string &device_id, std::string &&cert, op_e op) {
     switch (op) {
       case op_e::ADD: {
-        auto &client = map_id_client[device_id];
-        client.certs.emplace_back(std::move(cert));
-        client.device_id = device_id; 
-        
-        pt::ptree cert;
-        auto cert_id = uuid_util::uuid_t::generate().string();
-        cert.put("cert_id"s, cert_id);
-        cert.put("cert"s, SimpleWeb::Crypto::Base64::encode(client.certs.back()));
+          auto &client = map_id_client[device_id];
+          client.certs.emplace_back(std::move(cert));
+          client.device_id = device_id;
 
-        pt::ptree cert_nodes;
-        cert_nodes.push_back(std::make_pair(""s, cert));
+          auto cert_id = uuid_util::uuid_t::generate().string();
 
-        pt::ptree device;
-        device.put("device_id"s, device_id);
-        device.add_child("certs"s, cert_nodes);
+          RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+          connection->SetCAInfoFilePath(platf::appdata().string() + "/cacert.crt");
+          connection->SetUserAgent("sunshine/" + std::string(VERSION));
+          connection->AppendHeader("Content-Type", "application/json");
+          connection->AppendHeader("VX-Instance-Id", http::sunshine_instance_id);
+          connection->AppendHeader("VX-Service-Id", http::service_id);
+          connection->AppendHeader("VX-User-Id", user_id);
 
-        pt::ptree device_nodes;
-        device_nodes.push_back(std::make_pair(""s, device));
+          // чекаем сущесвует ли девайс GET /api/devices/{ID}
+          RestClient::Response respons_dev_get = connection->get("api/devices/" + device_id);
+          if (respons_dev_get.code == 204) {
+            // если нет то добавляем в базу POST /api/devices
+            pt::ptree device;
+            device.put("device_id"s, device_id);
 
-        pt::ptree user;
-        user.put("user_id"s, user_id);
-        user.add_child("devices"s, device_nodes);
+            std::stringstream ss;
+            pt::write_json(ss, device);
 
-        pt::ptree user_nodes;
-        user_nodes.push_back(std::make_pair(""s, user));;
+            RestClient::Response response_dev_post = connection->post("api/devices", ss.str());
+            if (response_dev_post.code == 201) {
+              BOOST_LOG(info) << "Updated device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server;
+            }
+            else {
+              BOOST_LOG(error) << "Device "sv << device_id << " for user "sv << user_id << " in "sv
+                               << config::sunshine.rest_server << " not updated, server returned code: "sv << response_dev_post.code;
 
-        pt::ptree root;
-        root.add_child("users"s, user_nodes);
+              map_id_client.erase(device_id);
+              return;
+            }
+          }
 
-        std::stringstream ss;
-        pt::write_json(ss, root);
+          //добавляем в базу сертификат POST /api/cert
+          pt::ptree cert;
+          cert.put("cert_id"s, cert_id);
+          cert.put("cert"s, SimpleWeb::Crypto::Base64::encode(client.certs.back()));
 
-        RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
-        connection->SetUserAgent("sunshine/" + std::string(VERSION));
-        connection->AppendHeader("Instance", http::sunshine_instance_id);
-        connection->AppendHeader("Service", http::service_id);
-        connection->AppendHeader("Content-Type", "application/json");
-        connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
+          std::stringstream ss;
+          pt::write_json(ss, cert);
 
-        RestClient::Response response = connection->post("api/devices", ss.str());
+          connection->AppendHeader("VX-Device-Id", device_id);
+          RestClient::Response response_cert_post = connection->post("api/certs", ss.str());
 
-        if (response.code == 200)
-          BOOST_LOG(info) << "Updated certificate "sv << device_id << ", device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server;
-        else {
-          BOOST_LOG(warning) << "Certificate "sv << cert_id << ", device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server << " not updated, server returned code: "sv << response.code;
-          map_id_client.erase(device_id);
-        }
+          if (response_cert_post.code == 201) {
+            BOOST_LOG(info) << "Updated certificate "sv << cert_id << " for device "sv << device_id << " in "sv << config::sunshine.rest_server;
+          }
+          else {
+            BOOST_LOG(error) << "Certificate "sv << cert_id << " for device "sv << device_id << " in "sv
+                             << config::sunshine.rest_server << " not updated, server returned code: "sv << response_cert_post.code;
+
+            map_id_client.erase(device_id);
+            return;
+          }
 
       } break;
       case op_e::REMOVE:
-        RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
-        connection->SetUserAgent("sunshine/" + std::string(VERSION));
-        connection->AppendHeader("Instance", http::sunshine_instance_id);
-        connection->AppendHeader("Service", http::service_id);
-        connection->SetCAInfoFilePath(platf::appdata().string()+ "/cacert.crt");
-        
-        RestClient::Response response = connection->del("api/devices/" + device_id);
+          RestClient::Connection* connection = new RestClient::Connection(config::sunshine.rest_server);
+          connection->SetCAInfoFilePath(platf::appdata().string() + "/cacert.crt");
+          connection->SetUserAgent("sunshine/" + std::string(VERSION));
+          connection->AppendHeader("Content-Type", "application/json");
+          connection->AppendHeader("VX-Instance-Id", http::sunshine_instance_id);
+          connection->AppendHeader("VX-Service-Id", http::service_id);
+          connection->AppendHeader("VX-User-Id", user_id);
+          connection->AppendHeader("VX-Device-Id", device_id);
 
-        if (response.code == 200) {
-          BOOST_LOG(info) << "Removed device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server;
-          map_id_client.erase(device_id);
-        }
-        else {
-          BOOST_LOG(warning) << "Device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server << " not removed, server returned code: "sv << response.code;
-        }
-        break;
+          RestClient::Response response = connection->del("api/devices/" + device_id);
+
+          if (response.code == 200) {
+            BOOST_LOG(info) << "Removed device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server;
+            map_id_client.erase(device_id);
+          }
+          else {
+            BOOST_LOG(warning) << "Device "sv << device_id << " for user "sv << user_id << " in "sv << config::sunshine.rest_server << " not removed, server returned code: "sv << response.code;
+          }
+          break;
     }
 
     if (!config::sunshine.flags[config::flag::FRESH_STATE]) {
